@@ -1,0 +1,12 @@
+{
+  "name": "logseq-dangerzone",
+  "version": "0.0.1",
+  "author": "Cecilia Baldoni",
+  "description": "Plugin for Logseq inspired by the 'dangerzone' writing plugin in Obsidian.",
+  "main": "index.js",
+  "license": "MIT",
+  "logseq": {
+    "icon": "logseq.png",
+    "id": "_dw3jgdhxn"
+  }
+}
