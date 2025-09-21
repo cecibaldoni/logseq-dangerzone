@@ -1,35 +1,75 @@
 function main() {
   const genRandomStr = () => Math.random().toString(36).slice(2, 7)
+  const DEFAULT_DURATION = 5 // minutes
 
-  logseq.Editor.registerSlashCommand('dangerzone', async () => {
-    // Ask user for duration in minutes via prompt
-    const durationStr = await logseq.UI.showModalPrompt({
-      title: 'Set Dangerzone Timer Duration (minutes)',
-      label: 'Minutes',
-      placeholder: 'Enter duration in minutes',
-      defaultValue: '25',
-      validation: value => {
-        const n = Number(value)
-        if (!n || n < 1 || n > 999) return 'Please enter a number from 1 to 999'
-        return true
+  // Map to hold active timer timeout IDs keyed by timerId
+  const activeTimers = new Map()
+
+  logseq.provideModel({
+    // Called on user clicking START button
+    async startTimer(e) {
+      const timerId = e.dataset.timerId
+      const slotId = e.dataset.slotId
+      const blockUuid = e.dataset.blockUuid
+
+      const block = await logseq.Editor.getBlock(blockUuid)
+      if (!block?.content) return
+
+      const startTime = Date.now()
+
+      // Regex to parse macro args: ID, firstArg, secondArg (duration)
+      const macroRegex = /\{\{renderer\s+:dangerzone_([^,}]+),([^,}]+)(?:,([^,}]+))?\}\}/
+      const match = block.content.match(macroRegex)
+      if (!match) return
+
+      const id = match[1].trim()
+      let firstArg = match[2].trim()       // could be duration or start time
+      let secondArg = match[3]?.trim() || DEFAULT_DURATION.toString()
+
+      // Determine if already started (firstArg is timestamp)
+      const isStarted = firstArg.length > 10 && !isNaN(Number(firstArg))
+
+      let duration, newContent
+
+      if (isStarted) {
+        // Already started: update start time with current, keep duration
+        duration = secondArg
+        newContent = block.content.replace(
+          macroRegex,
+          `{{renderer :dangerzone_${timerId},${startTime},${duration}}}`
+        )
+      } else {
+        // Not started yet: firstArg is duration, shift to second argument
+        duration = firstArg || DEFAULT_DURATION.toString()
+        newContent = block.content.replace(
+          macroRegex,
+          `{{renderer :dangerzone_${timerId},${startTime},${duration}}}`
+        )
       }
-    })
 
-    if (!durationStr) {
-      logseq.App.showMsg('Canceled timer creation')
-      return
+      await logseq.Editor.updateBlock(blockUuid, newContent)
+
+      // After block update, start rendering timer UI
+      startRenderingTimer({ timerId: `dangerzone_${timerId}`, slotId, startTime, durationMins: Number(duration) })
     }
-
-    const duration = Number(durationStr)
-    const id = genRandomStr()
-    // Insert macro with duration parameter (no start time yet)
-    await logseq.Editor.insertAtEditingCursor(`{{renderer :dangerzone_${id},,${duration}}}`)
   })
 
-  // Renderer function like before, listens to macro render slots
-  async function renderTimer({ timerId, slotId, startTime, durationMins }) {
+  // Slash command inserts a timer macro with default duration
+  logseq.Editor.registerSlashCommand('dangerzone', async () => {
+    const id = genRandomStr()
+    await logseq.Editor.insertAtEditingCursor(`{{renderer :dangerzone_${id},${DEFAULT_DURATION}}}`)
+  })
+
+  // Starts rendering timer UI and manages active timer for cleanup
+  function startRenderingTimer({ timerId, slotId, startTime, durationMins }) {
     if (!startTime) return
-    const duration = (durationMins || 1) * 60
+    const duration = (durationMins || DEFAULT_DURATION) * 60 // seconds
+
+    // Clear any existing timer for the same id before starting new one
+    if (activeTimers.has(timerId)) {
+      clearTimeout(activeTimers.get(timerId))
+      activeTimers.delete(timerId)
+    }
 
     function _render() {
       const elapsed = Math.floor((Date.now() - startTime) / 1000)
@@ -38,75 +78,86 @@ function main() {
       const secs = left % 60
       const done = left <= 0
 
-      logseq.provideUI({
-        key: timerId,
-        slot: slotId,
-        reset: true,
-        template: done
-          ? `<span>✅ Timer Done!</span>`
-          : `<span>Dangerzone: ${mins}:${secs.toString().padStart(2, '0')} left</span>`
-      })
+      try {
+        logseq.provideUI({
+          key: timerId,
+          slot: slotId,
+          reset: true,
+          template: done
+            ? `<span>✅ Timer Done!</span>`
+            : `<span>Dangerzone: ${mins}:${secs.toString().padStart(2, '0')} left</span>`
+        })
+      } catch (e) {
+        // Ignore UI update errors (e.g., slot missing)
+      }
 
-      if (!done) setTimeout(_render, 1000)
+      if (!done) {
+        const timeoutId = setTimeout(_render, 1000)
+        activeTimers.set(timerId, timeoutId)
+      } else {
+        activeTimers.delete(timerId)
+      }
     }
     _render()
   }
 
-  logseq.provideModel({
-    async startTimer(e) {
-      const timerId = e.dataset.timerId
-      const slotId = e.dataset.slotId
-      const blockUuid = e.dataset.blockUuid
-
-      const startTime = Date.now()
-      // Update block inserting the start time (keeping duration same)
-      const block = await logseq.Editor.getBlock(blockUuid)
-      if (!block?.content) return
-
-      // Extract duration from existing macro
-      const macroRegex = /\{\{renderer\s+:dangerzone_[^,}]+(?:,([^,}]*))?,([^,}]+)?\}\}/
-      const match = block.content.match(macroRegex)
-      if (!match) return
-      const currentDuration = match[2] || '25'
-
-      // Update macro with startTime and duration
-      const newContent = block.content.replace(
-        macroRegex,
-        `{{renderer :dangerzone_${timerId},${startTime},${currentDuration}}}`
-      )
-      await logseq.Editor.updateBlock(blockUuid, newContent)
-
-      renderTimer({ timerId: `dangerzone_${timerId}`, slotId, startTime, durationMins: Number(currentDuration) })
+  // Cleanup timers when page changes or block unmounts to avoid errors
+  logseq.App.onPageChanged(() => {
+    for (const timeoutId of activeTimers.values()) {
+      clearTimeout(timeoutId)
     }
+    activeTimers.clear()
   })
 
+  // Optional: if Logseq exposes unmount event per slot, it can be used here
+  // For now, onPageChanged covers most cases
+
+  // Macro renderer hook
   logseq.App.onMacroRendererSlotted(({ slot, payload }) => {
     const args = payload.arguments
     const type = args[0]
-    const startTime = args[1]
-    const durationMins = args[2]
-
     if (!type?.startsWith(':dangerzone_')) return
 
     const id = type.split('_')[1]?.trim()
     const timerId = 'dangerzone_' + id
 
-    if (!startTime || startTime === '') {
-      // Render a simple "START" button
+    const firstArgRaw = args[1] ?? ''
+    const secondArgRaw = args[2] ?? ''
+
+    const firstArg = firstArgRaw.toString().trim()
+    const secondArg = secondArgRaw.toString().trim()
+
+    // Determine if timer started (firstArg is timestamp)
+    const isStarted = firstArg.length > 10 && !isNaN(Number(firstArg))
+
+    if (!isStarted) {
+      // Not started: show START button and current duration
       logseq.provideUI({
         key: timerId,
         slot,
         reset: true,
-        template: `<button data-slot-id="${slot}"
-                          data-timer-id="${id}"
-                          data-block-uuid="${payload.uuid}"
-                          data-on-click="startTimer">
-                    Start
-                   </button>`
+        template: `
+          <button data-slot-id="${slot}"
+                  data-timer-id="${id}"
+                  data-block-uuid="${payload.uuid}"
+                  data-on-click="startTimer">
+            Start
+          </button>
+          <div style="margin-top:6px; font-size:smaller; color:#666;">
+            Duration (minutes): ${firstArg || DEFAULT_DURATION}
+          </div>
+        `
       })
       return
     }
-    renderTimer({ timerId, slotId: slot, startTime: Number(startTime), durationMins: Number(durationMins) })
+
+    // Timer running: start countdown rendering
+    startRenderingTimer({
+      timerId,
+      slotId: slot,
+      startTime: Number(firstArg),
+      durationMins: Number(secondArg) || DEFAULT_DURATION
+    })
   })
 }
 
