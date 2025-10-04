@@ -26,13 +26,13 @@ function main() {
       let firstArg = match[2].trim()       // could be duration or start time
       let secondArg = match[3]?.trim() || DEFAULT_DURATION.toString()
 
-      // Determine if already started (firstArg is timestamp)
+      // check if already started (firstArg is timestamp)
       const isStarted = firstArg.length > 10 && !isNaN(Number(firstArg))
 
       let duration, newContent
 
       if (isStarted) {
-        // Already started: update start time with current, keep duration
+        // already started: update start time with current, keep duration
         duration = secondArg
         newContent = block.content.replace(
           macroRegex,
@@ -49,12 +49,16 @@ function main() {
 
       await logseq.Editor.updateBlock(blockUuid, newContent)
 
-      // After block update, start rendering timer UI
+      // NEW: Start watching for typing activity on child blocks
+      startTypingMonitor({ timerId: `dangerzone_${timerId}`, blockUuid })
+
+
+      // start rendering timer UI
       startRenderingTimer({ timerId: `dangerzone_${timerId}`, slotId, startTime, durationMins: Number(duration) })
     }
   })
 
-  // Slash command inserts a timer macro with default duration
+  // slash command inserts a timer macro with default duration
   logseq.Editor.registerSlashCommand('dangerzone', async () => {
     const id = genRandomStr()
     await logseq.Editor.insertAtEditingCursor(`{{renderer :dangerzone_${id},${DEFAULT_DURATION}}}`)
@@ -101,15 +105,43 @@ function main() {
     _render()
   }
 
+  // monitor typing activity and delete children if inactive too long
+  function startTypingMonitor({ timerId, blockUuid }) {
+    // TODO: Initialize inactivity counter
+    // TODO: Get all child blocks of blockUuid
+    // TODO: Subscribe to onBlockChanged for each child
+    // TODO: In the callback, reset inactivity counter
+    // TODO: Start interval that increments inactivity counter every second
+    // TODO: When counter reaches INACTIVITY_THRESHOLD, call deleteChildBlocks()
+    // TODO: Store cleanup function in typingWatchers Map
+  }
+
+  // NEW: Delete all child blocks but keep the parent
+  async function deleteChildBlocks(blockUuid) {
+    // TODO: Use logseq.Editor.getBlock(blockUuid) to get parent block
+    // TODO: Check if block.children exists and has length > 0
+    // TODO: Loop through block.children array
+    // TODO: For each child UUID, call await logseq.Editor.removeBlock(childUuid)
+    // TODO: show a notification that children were deleted
+  }
+
   // Cleanup timers when page changes or block unmounts to avoid errors
   logseq.App.onPageChanged(() => {
     for (const timeoutId of activeTimers.values()) {
       clearTimeout(timeoutId)
     }
     activeTimers.clear()
+
+      // NEW: Clean up typing watchers and inactivity timers
+    for (const [timerId, cleanup] of typingWatchers.entries()) {
+      // TODO: Call cleanup function to unsubscribe from DB changes
+      // TODO: Clear any running inactivity interval
+    }
+    typingWatchers.clear()
+    inactivityTimers.clear()
+  
   })
 
-  // Optional: if Logseq exposes unmount event per slot, it can be used here
   // For now, onPageChanged covers most cases
 
   // Macro renderer hook
